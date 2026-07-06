@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-// ignore: avoid_web_libraries_in_flutter, deprecated_member_use
-import 'dart:js' as js;
+// Web環境の時だけブラウザの音声合成(SpeechSynthesis)を直接叩くためのパッケージ
+// ignore: depend_on_referenced_packages
+import 'package:web/web.dart' as web;
 
 void main() {
   runApp(const MyApp());
@@ -35,19 +36,14 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> {
   final List<Map<String, dynamic>> _masterLessonList = [];
   int _selectedLessonIndex = 0;
-  String _activeTab = 'grammar'; // 'grammar', 'sentences', 'vocabulary'
+  String _activeTab = 'grammar'; // 'grammar', 'sentences', 'vocabulary', 'quiz'
 
-  List<Map<String, String>> _activeQuizList = [];
-  int _currentIndex = 0;
-  bool _isQuizMode = false;
-
-  final TextEditingController _controller = TextEditingController();
-  String _resultMessage = '';
-  String _meaningMessage = '';
+  // クイズ（4択用）の状態管理
+  int _currentQuizIndex = 0;
+  String? _selectedChoice;
+  bool _isAnswered = false;
   bool _isCorrect = false;
-  double _speechRate = 0.9;
-
-  Null get cross => null;
+  int _score = 0;
 
   @override
   void initState() {
@@ -55,422 +51,27 @@ class _MyHomePageState extends State<MyHomePage> {
     _initializeAllLessons();
   }
 
-  void _startQuiz(String type) {
-    var currentLessonData = _masterLessonList[_selectedLessonIndex];
-    List<dynamic> targetData = type == 'sentences'
-        ? currentLessonData['sentences']
-        : currentLessonData['vocabulary'];
-
-    if (targetData.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('データがありません。')));
-      return;
-    }
-
-    _activeQuizList = targetData.map((e) {
-      return {
-        'quiz': type == 'sentences'
-            ? e['chinese'].toString()
-            : e['word'].toString(),
-        'pinyin': e['pinyin'].toString(),
-        'answer': e['japanese'].toString(),
-      };
-    }).toList();
-
-    setState(() {
-      _currentIndex = 0;
-      _isQuizMode = true;
-      _resultMessage = '';
-      _meaningMessage = '';
-      _controller.clear();
-    });
-  }
-
-  void _speakChinese(String text) {
+  // index.htmlの変更が不要な、Flutter完結型の音声再生関数
+  void _speak(String text) {
     if (kIsWeb) {
-      js.context.callMethod('eval', [
-        '''
-        var utterance = new SpeechSynthesisUtterance("$text");
-        utterance.lang = "zh-CN";
-        utterance.rate = $_speechRate;
-        window.speechSynthesis.speak(utterance);
-        ''',
-      ]);
+      try {
+        // ブラウザのwindow.speechSynthesisを取得
+        final synth = web.window.speechSynthesis;
+
+        // 再生中の音声を一度クリア
+        synth.cancel();
+
+        // 発話オブジェクトを作成
+        final utterance = web.SpeechSynthesisUtterance(text);
+        utterance.lang = 'zh-CN'; // 中国語（大陸）に設定
+        utterance.rate = 0.85; // 聞き取りやすいように少しだけゆっくり
+
+        // 再生を実行
+        synth.speak(utterance);
+      } catch (e) {
+        debugPrint('音声再生エラー: $e');
+      }
     }
-  }
-
-  String _cleanText(String text) {
-    var output = text.toLowerCase();
-    output = output.replaceAll(RegExp(r'[āáǎà]'), 'a');
-    output = output.replaceAll(RegExp(r'[ēéěè]'), 'e');
-    output = output.replaceAll(RegExp(r'[īíǐì]'), 'i');
-    output = output.replaceAll(RegExp(r'[ōóǒò]'), 'o');
-    output = output.replaceAll(RegExp(r'[ūúǔù]'), 'u');
-    output = output.replaceAll(RegExp(r'[ǖǘǚǜü]'), 'v');
-    output = output.replaceAll(RegExp(r"[ ,.?？，。！!’'…-ー]"), '');
-    return output;
-  }
-
-  void _checkAnswer() {
-    String input = _controller.text.trim();
-    String pinyin = _activeQuizList[_currentIndex]['pinyin']!;
-    String answer = _activeQuizList[_currentIndex]['answer']!;
-
-    _speakChinese(_activeQuizList[_currentIndex]['quiz']!);
-
-    setState(() {
-      _meaningMessage = '意味: $answer';
-      if (_cleanText(input) == _cleanText(pinyin)) {
-        _resultMessage = '🎉 正解！\n(ピンイン: $pinyin)';
-        _isCorrect = true;
-      } else {
-        _resultMessage = '❌ 残念！\n(正解: $pinyin)';
-        _isCorrect = false;
-      }
-    });
-  }
-
-  void _nextQuiz() {
-    setState(() {
-      _controller.clear();
-      _resultMessage = '';
-      _meaningMessage = '';
-      if (_currentIndex < _activeQuizList.length - 1) {
-        _currentIndex++;
-      } else {
-        _isQuizMode = false;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('全問終了しました！')));
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: Text(
-          _isQuizMode ? '第 ${_selectedLessonIndex + 1} 講 クイズ' : widget.title,
-        ),
-        actions: _isQuizMode
-            ? [
-                IconButton(
-                  icon: const Icon(Icons.exit_to_app),
-                  onPressed: () => setState(() => _isQuizMode = false),
-                ),
-              ]
-            : null,
-      ),
-      body: Center(
-        child: Container(
-          width: 500,
-          padding: const EdgeInsets.all(16.0),
-          child: _isQuizMode ? _buildQuizView() : _buildMainDashboardView(),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMainDashboardView() {
-    var currentLesson = _masterLessonList[_selectedLessonIndex];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.deepPurple, width: 1.5),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: DropdownButtonHideUnderline(
-            child: DropdownButton<int>(
-              value: _selectedLessonIndex,
-              isExpanded: true,
-              items: _masterLessonList.map((lesson) {
-                return DropdownMenuItem<int>(
-                  value: _masterLessonList.indexOf(lesson),
-                  child: Text(
-                    '第 ${lesson['lesson']} 講: ${lesson['title']}',
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                );
-              }).toList(),
-              onChanged: (int? val) =>
-                  setState(() => _selectedLessonIndex = val!),
-            ),
-          ),
-        ),
-        const SizedBox(height: 15),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            _buildTabButton('grammar', '📖 文法紹介'),
-            _buildTabButton('sentences', '💬 会話文'),
-            _buildTabButton('vocabulary', '📕 単語帳'),
-          ],
-        ),
-        const SizedBox(height: 15),
-        Expanded(
-          child: Container(
-            decoration: BoxDecoration(
-              color: Colors.grey.withValues(alpha: 0.05),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.grey.shade300),
-            ),
-            padding: const EdgeInsets.all(10),
-            child: _buildTabContent(currentLesson),
-          ),
-        ),
-        const SizedBox(height: 15),
-        Row(
-          children: [
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () => _startQuiz('sentences'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.amber,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                ),
-                icon: const Icon(Icons.quiz, color: Colors.black),
-                label: const Text(
-                  '会話文クイズ',
-                  style: TextStyle(
-                    color: Colors.black,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () => _startQuiz('vocabulary'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.orangeAccent,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                ),
-                icon: const Icon(Icons.g_translate, color: Colors.black),
-                label: const Text(
-                  '単語クイズ',
-                  style: TextStyle(
-                    color: Colors.black,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildTabButton(String tabKey, String label) {
-    bool isSelected = _activeTab == tabKey;
-    return ElevatedButton(
-      onPressed: () => setState(() => _activeTab = tabKey),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: isSelected ? Colors.deepPurple : Colors.white,
-        foregroundColor: isSelected ? Colors.white : Colors.deepPurple,
-        elevation: isSelected ? 2 : 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: const BorderSide(color: Colors.deepPurple),
-        ),
-      ),
-      child: Text(label),
-    );
-  }
-
-  Widget _buildTabContent(Map<String, dynamic> currentLesson) {
-    if (_activeTab == 'grammar') {
-      List<dynamic> grammarList = currentLesson['grammar'] ?? [];
-      if (grammarList.isEmpty) {
-        return const Center(child: Text('この課の解説は会話文と単語帳を確認してください。'));
-      }
-      return ListView.builder(
-        itemCount: grammarList.length,
-        itemBuilder: (context, idx) {
-          var item = grammarList[idx];
-          return Card(
-            margin: const EdgeInsets.only(bottom: 10),
-            color: Colors.white,
-            child: Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item['title'],
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                      color: Colors.deepPurple,
-                    ),
-                  ),
-                  const Divider(height: 12),
-                  Text(
-                    item['desc'],
-                    style: const TextStyle(fontSize: 14, height: 1.4),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      );
-    } else if (_activeTab == 'sentences') {
-      List<dynamic> sentenceList = currentLesson['sentences'] ?? [];
-      return ListView.builder(
-        itemCount: sentenceList.length,
-        itemBuilder: (context, idx) {
-          var item = sentenceList[idx];
-          return ListTile(
-            leading: CircleAvatar(
-              backgroundColor: Colors.deepPurple.withValues(alpha: 0.1),
-              child: Text('${idx + 1}'),
-            ),
-            title: Text(
-              item['chinese'],
-              style: const TextStyle(fontWeight: FontWeight.bold),
-            ),
-            subtitle: Text('${item['pinyin']}\n${item['japanese']}'),
-            trailing: IconButton(
-              icon: const Icon(Icons.volume_up, size: 20),
-              onPressed: () => _speakChinese(item['chinese']),
-            ),
-          );
-        },
-      );
-    } else {
-      List<dynamic> vocabList = currentLesson['vocabulary'] ?? [];
-      return ListView.builder(
-        itemCount: vocabList.length,
-        itemBuilder: (context, idx) {
-          var item = vocabList[idx];
-          return Card(
-            child: ListTile(
-              title: Text(
-                item['word'],
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.blueGrey,
-                ),
-              ),
-              subtitle: Text('${item['pinyin']}  ➔  ${item['japanese']}'),
-              trailing: IconButton(
-                icon: const Icon(Icons.volume_up, size: 18),
-                onPressed: () => _speakChinese(item['word']),
-              ),
-            ),
-          );
-        },
-      );
-    }
-  }
-
-  Widget _buildQuizView() {
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          Text(
-            '第 ${_currentIndex + 1} 問 / 全 ${_activeQuizList.length} 問',
-            style: const TextStyle(
-              color: Colors.grey,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 15),
-          Text(
-            _activeQuizList[_currentIndex]['quiz']!,
-            style: const TextStyle(
-              fontSize: 34,
-              fontWeight: FontWeight.bold,
-              color: Colors.deepPurple,
-            ),
-          ),
-          const SizedBox(height: 15),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              ChoiceChip(
-                label: const Text('🐢 慢'),
-                selected: _speechRate == 0.6,
-                onSelected: (s) => setState(() => _speechRate = 0.6),
-              ),
-              const SizedBox(width: 10),
-              ChoiceChip(
-                label: const Text('ふつう'),
-                selected: _speechRate == 0.9,
-                onSelected: (s) => setState(() => _speechRate = 0.9),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          ElevatedButton.icon(
-            onPressed: () =>
-                _speakChinese(_activeQuizList[_currentIndex]['quiz']!),
-            icon: const Icon(Icons.volume_up),
-            label: const Text('発音を再生'),
-          ),
-          const SizedBox(height: 20),
-          TextField(
-            controller: _controller,
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              labelText: 'ピンインを入力 (例: ni hao)',
-            ),
-          ),
-          const SizedBox(height: 15),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _checkAnswer,
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
-              child: const Text('答え合わせ'),
-            ),
-          ),
-          const SizedBox(height: 20),
-          Text(
-            _resultMessage,
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: _isCorrect ? Colors.green : Colors.red,
-            ),
-            textAlign: TextAlign.center,
-          ),
-          if (_meaningMessage.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-              _meaningMessage,
-              style: const TextStyle(
-                fontSize: 18,
-                color: Colors.blue,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ],
-          const SizedBox(height: 20),
-          if (_resultMessage.isNotEmpty)
-            ElevatedButton(
-              onPressed: _nextQuiz,
-              child: Text(
-                _currentIndex == _activeQuizList.length - 1
-                    ? '終了してダッシュボードへ'
-                    : '次の問題へ ➡️',
-              ),
-            ),
-        ],
-      ),
-    );
   }
 
   void _initializeAllLessons() {
@@ -584,7 +185,23 @@ class _MyHomePageState extends State<MyHomePage> {
             "japanese": "大丈夫です／気にしないでください",
           },
           {"word": "请问", "pinyin": "qǐngwèn", "japanese": "お尋ねします"},
-          {"word": "静", "pinyin": "jìng", "japanese": "話す／静か"},
+          {"word": "静", "pinyin": "jìng", "japanese": "静かである"},
+          {"word": "你们", "pinyin": "nǐmen", "japanese": "あなたたち"},
+          {"word": "同学", "pinyin": "tóngxué", "japanese": "クラスメイト/学生"},
+        ],
+        "grammar_quizzes": [
+          {
+            "quiz": "下文の空欄に入る最も適切な文末助詞を選びなさい。\n你身体好（ ）。",
+            "choices": ["吗", "呢", "不", "了"],
+            "answer": "吗",
+            "explanation": "文末に疑問の「吗」をつけることで、「お元気ですか」という疑問文になります。",
+          },
+          {
+            "quiz": "「谢谢（ありがとう）」に対する正しい返答を選びなさい。",
+            "choices": ["没关系", "不客气", "对不起", "再见"],
+            "answer": "不客气",
+            "explanation": "感謝されたときは「不客气（どういたしまして）」と返します。「没关系」は謝罪に対する返答です。",
+          },
         ],
       },
       {
@@ -619,18 +236,18 @@ class _MyHomePageState extends State<MyHomePage> {
             "japanese": "私は田中太郎といいます。",
           },
           {
-            "chinese": "请问，你是哪个学部的学生？",
-            "pinyin": "Qǐngwèn, nǐ shì nǎ ge xuébù de xuésheng?",
+            "chinese": "请问，你是哪个学部の学生？",
+            "pinyin": "Qǐngwèn, nǐ...哪个学部の学生？",
             "japanese": "失礼ですが、どの学部の学生ですか？",
           },
           {
-            "chinese": "我是工学部的学生。",
+            "chinese": "我是工学部の学生。",
             "pinyin": "Wǒ shì gōngxuébù de xuésheng.",
             "japanese": "私は工学部の学生です。",
           },
           {
             "chinese": "你是哪个学科の学生？",
-            "pinyin": "Nǐ shì nǎ ge xuékē de xuésheng?",
+            "pinyin": "Nǐ ... 哪个学科的学生？",
             "japanese": "専攻は何ですか？",
           },
           {
@@ -640,13 +257,18 @@ class _MyHomePageState extends State<MyHomePage> {
           },
           {
             "chinese": "你是先进工学部の学生吗？",
-            "pinyin": "Nǐ shì xiānjìn gōngxuébù de xuésheng ma?",
+            "pinyin": "Nǐ ... 先进工学部の学生吗？",
             "japanese": "あなたは先進工学部の学生ですか？",
           },
           {
             "chinese": "对，我是先进工学部の学生。",
-            "pinyin": "Duì, wǒ shì xiānjìn gōngxuébù de xuésheng.",
+            "pinyin": "Duì, wǒ...先进工学部の学生。",
             "japanese": "はい、そうです。先進工学部です。",
+          },
+          {
+            "chinese": "张老师是大学教授。",
+            "pinyin": "Zhāng lǎoshī shì dàxué jiàoshòu.",
+            "japanese": "張先生は大学の教授です。",
           },
         ],
         "vocabulary": [
@@ -687,6 +309,23 @@ class _MyHomePageState extends State<MyHomePage> {
             "japanese": "生命工学科",
           },
           {"word": "大学", "pinyin": "dàxué", "japanese": "大学"},
+          {"word": "教授", "pinyin": "jiàoshòu", "japanese": "教授"},
+          {"word": "哪", "pinyin": "nǎ", "japanese": "どの、どちらの"},
+        ],
+        "grammar_quizzes": [
+          {
+            "quiz": "「私は工学部の学生です」の正しい語順を選びなさい。",
+            "choices": ["我工学部是学生。", "我是工学部の学生。", "我是学生工学部。", "工学部我是学生。"],
+            "answer": "我是工学部の学生。",
+            "explanation":
+                "「A 是 B (AはBである)」の判定文構造になります。所属を表すときは「修飾語 + 的 + 名詞」の形にします。",
+          },
+          {
+            "quiz": "フルネームを名乗る際に用いる正しい動詞を選びなさい。\n我（ ）田中太郎。",
+            "choices": ["姓", "叫", "是", "有"],
+            "answer": "叫",
+            "explanation": "名字のみを言う場合は「姓」、フルネームや名前を言う場合は「叫」を使用します。",
+          },
         ],
       },
       {
@@ -702,21 +341,17 @@ class _MyHomePageState extends State<MyHomePage> {
         ],
         "sentences": [
           {"chinese": "你好！", "pinyin": "Nǐ hǎo!", "japanese": "こんにちは！"},
-          {
-            "chinese": "你是几年级？",
-            "pinyin": "Nǐ shì jǐ niánjí?",
-            "japanese": "何年生ですか？",
-          },
-          {"chinese": "我一年级。", "pinyin": "Wǒ yì niánjí.", "japanese": "1年生です。"},
+          {"chinese": "你是几年级？", "pinyin": "Nǐ ... 几年级？", "japanese": "何年生ですか？"},
+          {"chinese": "我一年级。", "pinyin": "Wǒ ... 年级。", "japanese": "1年生です。"},
           {
             "chinese": "你今年多大？",
-            "pinyin": "Nǐ jīnnián duō dā?",
+            "pinyin": "Nǐ jīnnián duō dà？",
             "japanese": "今年おいくつですか？",
           },
-          {"chinese": "我十八岁。", "pinyin": "Wǒ shíbā suì.", "japanese": "18歳です。"},
+          {"chinese": "我十八岁。", "pinyin": "Wǒ shíbā suì。", "japanese": "18歳です。"},
           {
             "chinese": "你家有几口人？",
-            "pinyin": "Nǐ jiā yǒu jǐ kǒu rén?",
+            "pinyin": "Nǐ jiā yǒu jǐ kǒu rén？",
             "japanese": "ご家族は何人ですか？",
           },
           {
@@ -724,27 +359,48 @@ class _MyHomePageState extends State<MyHomePage> {
             "pinyin": "Wǒ jiā yǒu sì kǒu rén. Bàba, māma, gēge hé wǒ.",
             "japanese": "4人家族です。父、母、兄と私です。",
           },
+          {
+            "chinese": "你弟弟也是大学生吗？",
+            "pinyin": "Nǐ dìdi yě 是大学生吗？",
+            "japanese": "あなたの弟さんも大学生ですか？",
+          },
         ],
         "vocabulary": [
-          {"word": "几几", "pinyin": "jǐniánjí", "japanese": "何年生"},
+          {"word": "几年级", "pinyin": "jǐ niánjí", "japanese": "何年生"},
           {"word": "年级", "pinyin": "niánjí", "japanese": "学年"},
           {"word": "今年", "pinyin": "jīnnián", "japanese": "今年"},
-          {"word": "多大", "pinyin": "duō dā", "japanese": "何歳（年齢を尋ねる）"},
+          {"word": "多大", "pinyin": "duō dà", "japanese": "何歳（年齢を尋ねる）"},
           {"word": "岁", "pinyin": "suì", "japanese": "歳"},
           {"word": "家", "pinyin": "jiā", "japanese": "家／家庭"},
           {"word": "有", "pinyin": "yǒu", "japanese": "ある／持っている"},
-          {"word": "口", "pinyin": "kǒu", "japanese": "〜人（家族の数を数える）"},
+          {"word": "口", "pinyin": "kǒu", "japanese": "〜人（家族数を数える量詞）"},
           {"word": "人", "pinyin": "rén", "japanese": "人"},
-          {"word": "和", "pinyin": "hé", "japanese": "と（並列をつなぐ）"},
-          {"word": "几几", "pinyin": "jǐ suì", "japanese": "何歳（主に子どもに）"},
-          {"word": "年纪", "pinyin": "niánjì", "japanese": "年齢"},
+          {"word": "和", "pinyin": "hé", "japanese": "と（並列名詞を繋ぐ語）"},
+          {"word": "几岁", "pinyin": "jǐ suì", "japanese": "何歳（10歳未満の子供に）"},
           {"word": "个", "pinyin": "gè", "japanese": "個（一般的な数詞）"},
           {"word": "他", "pinyin": "tā", "japanese": "彼（三人称・男性）"},
           {"word": "她", "pinyin": "tā", "japanese": "彼女（三人称・女性）"},
-          {"word": "大一学生", "pinyin": "dàyī xuésheng", "japanese": "大学1年生"},
+          {"word": "大一学生", "pinyin": "dà yī xuésheng", "japanese": "大学1年生"},
           {"word": "独生子", "pinyin": "dúshēngzǐ", "japanese": "一人息子"},
           {"word": "独生女", "pinyin": "dúshēngnǚ", "japanese": "一人娘"},
-          {"word": "学生", "pinyin": "xuésheng", "japanese": "学生（日常的用法）"},
+          {"word": "爸爸", "pinyin": "bàba", "japanese": "お父さん"},
+          {"word": "妈妈", "pinyin": "māma", "japanese": "お母さん"},
+          {"word": "哥哥", "pinyin": "gēge", "japanese": "お兄さん"},
+          {"word": "弟弟", "pinyin": "dìdi", "japanese": "弟"},
+        ],
+        "grammar_quizzes": [
+          {
+            "quiz": "大人の年齢を尋ねる際、最も適切な疑問表現を選びなさい。\n你今年（ ）。",
+            "choices": ["几岁", "多大", "几口人", "什么"],
+            "answer": "多大",
+            "explanation": "一般的な大人の年齢を聞く場合は「多大」を使います。「几岁」は主に10歳未満の子供に対して使われます。",
+          },
+          {
+            "quiz": "家族の人数（口数）を聞くときの正しい表現を選びなさい。\n你家有（ ）口人？",
+            "choices": ["多大", "什么", "几", "多少"],
+            "answer": "几",
+            "explanation": "家族の人数を尋ねる量詞「口」の前には、数を聞く疑問詞「几」を組み合わせます。",
+          },
         ],
       },
       {
@@ -768,7 +424,7 @@ class _MyHomePageState extends State<MyHomePage> {
           },
           {
             "chinese": "教室在教学楼。",
-            "pinyin": "Jiàoshì zài jiàoxuélóu.",
+            "pinyin": "Jiàoxuélóu zài jiàoxuélóu.",
             "japanese": "教室は講義棟にあります。",
           },
           {
@@ -785,39 +441,57 @@ class _MyHomePageState extends State<MyHomePage> {
           {
             "chinese": "食堂在体育馆前边。",
             "pinyin": "Shítáng zài tǐyùguǎn qiánbian.",
-            "japanese": "食堂は体育馆の前にあります。",
+            "japanese": "食堂は体育館の前にあります。",
           },
           {
             "chinese": "大学里有体育馆吗？",
-            "pinyin": "Dàxué li yǒu tǐyùguǎn ma?",
-            "japanese": "大学の中に体育館はありますか？",
+            "pinyin": "Dàxué li...体育馆吗？",
+            "japanese": "大学の中に体育馆はありますか？",
           },
           {
             "chinese": "有，这里有体育馆。",
-            "pinyin": "Yǒu, zhèlǐ yǒu tǐyùguǎn.",
-            "japanese": "はい、あります。ここに体育館があります。",
+            "pinyin": "Yǒu, zhèlǐ 有体育馆。",
+            "japanese": "はい、ここに体育館があります。",
+          },
+          {
+            "chinese": "洗手间在楼梯左边。",
+            "pinyin": "Xǐshǒujiān zài lóutī zuǒbian.",
+            "japanese": "洗面所（トイレ）は階段の左側にあります。",
           },
         ],
         "vocabulary": [
           {"word": "教室", "pinyin": "jiàoshì", "japanese": "教室"},
-          {"word": "在", "pinyin": "zài", "japanese": "〜にある／いる（存在）"},
+          {"word": "在", "pinyin": "zài", "japanese": "〜にある／いる（存在・所在）"},
           {"word": "哪儿", "pinyin": "nǎr", "japanese": "どこ"},
           {"word": "教学楼", "pinyin": "jiàoxuélóu", "japanese": "講義棟"},
           {"word": "图书馆", "pinyin": "túshūguǎn", "japanese": "図書館"},
           {"word": "管理栋", "pinyin": "guǎnlǐdòng", "japanese": "管理棟"},
           {"word": "食堂", "pinyin": "shítáng", "japanese": "食堂"},
           {"word": "宿舍", "pinyin": "sùshè", "japanese": "寮／宿舎"},
-          {"word": "体育馆", "pinyin": "tǐyùguǎn", "japanese": "体育館"},
-          {"word": "城", "pinyin": "chéng", "japanese": "まち／その中に／そこに"},
-          {"word": "博物馆", "pinyin": "bówùguǎn", "japanese": "博物館"},
+          {"word": "体育馆", "pinyin": "tǐyùguǎn", "japanese": "体育馆"},
+          {"word": "前边", "pinyin": "qiánbian", "japanese": "前側 / 前"},
+          {"word": "旁边", "pinyin": "pángbiān", "japanese": "隣 / そば"},
           {"word": "实验室", "pinyin": "shíyànshì", "japanese": "実験室"},
           {"word": "车站", "pinyin": "chēzhàn", "japanese": "駅"},
-          {"word": "网球场", "pinyin": "wǎngqiúchǎng", "japanese": "テニスコート"},
+          {"word": "网球场", "pinyin": "wǎngqiúchǎng", "japanese": "テニコート"},
           {"word": "办公楼", "pinyin": "bàngōnglóu", "japanese": "事務棟"},
-          {"word": "运动场", "pinyin": "yùndòngchǎng", "japanese": "運動場"},
-          {"word": "医院", "pinyin": "yīyuàn", "japanese": "病院"},
-          {"word": "商店", "pinyin": "shāngdiàn", "japanese": "売店／店"},
-          {"word": "就诊中心", "pinyin": "jiùzhěn zhōngxīn", "japanese": "保健センター"},
+          {"word": "洗手间", "pinyin": "xǐshǒujiān", "japanese": "洗面所/トイレ"},
+          {"word": "楼梯", "pinyin": "lóutī", "japanese": "階段"},
+          {"word": "左边", "pinyin": "zuǒbian", "japanese": "左側"},
+        ],
+        "grammar_quizzes": [
+          {
+            "quiz": "「食堂はどこにありますか？」を意味する正しい中国語を選びなさい。",
+            "choices": ["食堂在什么？", "食堂在哪儿？", "哪儿在食堂？", "食堂在前面吗？"],
+            "answer": "食堂在哪儿？",
+            "explanation": "場所の所在を尋ねる基本構文は「主語 + 在 + 哪儿？」になります。",
+          },
+          {
+            "quiz": "「〜の隣／そば」を意味する方位詞を選びなさい。\n图书馆在管理栋（ ）。",
+            "choices": ["前边", "旁", "旁边", "左"],
+            "answer": "旁边",
+            "explanation": "名詞の後ろにくっつけて「〜のそば、横」を表す方位詞は「旁边」が適切です。",
+          },
         ],
       },
       {
@@ -841,7 +515,7 @@ class _MyHomePageState extends State<MyHomePage> {
           },
           {
             "chinese": "今天星期四。",
-            "pinyin": "Jīntiān xīngqīsì.",
+            "pinyin": "Jīntiān xīngqīsì。",
             "japanese": "今日は木曜日です。",
           },
           {
@@ -851,7 +525,7 @@ class _MyHomePageState extends State<MyHomePage> {
           },
           {
             "chinese": "有，有汉语课。",
-            "pinyin": "Yǒu, yǒu Hànyǔ kè.",
+            "pinyin": "Yǒu, yǒu Hànyǔ kè。",
             "japanese": "はい、中国語の授業があります。",
           },
           {
@@ -861,7 +535,7 @@ class _MyHomePageState extends State<MyHomePage> {
           },
           {
             "chinese": "一点上课。",
-            "pinyin": "Yì diǎn shàngkè.",
+            "pinyin": "Yì diǎn shàngkè。",
             "japanese": "1時に始まります。",
           },
           {
@@ -871,35 +545,53 @@ class _MyHomePageState extends State<MyHomePage> {
           },
           {
             "chinese": "两点半下课。",
-            "pinyin": "Liǎng diǎn bàn xiàkè.",
+            "pinyin": "Liǎng diǎn bàn xiàkè。",
             "japanese": "2時半に終わります。",
+          },
+          {
+            "chinese": "星期六没有专业课。",
+            "pinyin": "Xīngqīliù méiyǒu zhuānyèkè。",
+            "japanese": "土曜日は専門科目の授業はありません。",
           },
         ],
         "vocabulary": [
           {"word": "今天", "pinyin": "jīntiān", "japanese": "今日"},
-          {"word": "星期几", "pinyin": "xīngqījǐ", "japanese": "何曜日"},
+          {"word": "星期几", "pinyin": "xījǐ", "japanese": "何曜日"},
           {"word": "星期", "pinyin": "xīngqī", "japanese": "週／曜日"},
           {"word": "汉语", "pinyin": "Hànyǔ", "japanese": "中国語"},
           {"word": "几点", "pinyin": "jǐ diǎn", "japanese": "何時"},
-          {"word": "上课", "pinyin": "shàngkè", "japanese": "授業をする／授業に出る"},
+          {"word": "上课", "pinyin": "shàngkè", "japanese": "授業が始まる / 授業に出る"},
           {"word": "下课", "pinyin": "xiàkè", "japanese": "授業が終わる"},
           {"word": "点", "pinyin": "diǎn", "japanese": "時（時間を表す単位）"},
           {"word": "半", "pinyin": "bàn", "japanese": "半（30分）"},
-          {"word": "分", "pinyin": "fēn", "japanese": "分（時間を表す単位）"},
+          {"word": "分", "pinyin": "fēn", "japanese": "分"},
           {"word": "物理", "pinyin": "wùlǐ", "japanese": "物理"},
           {"word": "化学", "pinyin": "huàxué", "japanese": "化学"},
           {"word": "明天", "pinyin": "míngtiān", "japanese": "明日"},
-          {"word": "日历", "pinyin": "rìlì", "japanese": "体育"},
           {"word": "数学", "pinyin": "shùxué", "japanese": "数学"},
-          {"word": "英语", "pinyin": "Yīngyǔ", "japanese": "英語"},
-          {"word": "实验", "pinyin": "shíyàn", "japanese": "実験"},
-          {"word": "历史", "pinyin": "lìshǐ", "japanese": "歴史"},
-          {"word": "生物学", "pinyin": "shēngwùxué", "japanese": "生物学"},
+          {"word": "英語", "pinyin": "Yīngyǔ", "japanese": "英語"},
+          {"word": "专业课", "pinyin": "zhuānyèkè", "japanese": "専門科目"},
+          {"word": "星期天", "pinyin": "xīngqītiān", "japanese": "日曜日"},
+        ],
+        "grammar_quizzes": [
+          {
+            "quiz": "中国語の曜日表現で、「日曜日」にあたらないものを選びなさい。",
+            "choices": ["星期日", "星期天", "星期七", "礼拜天"],
+            "answer": "星期七",
+            "explanation":
+                "月曜から土曜は星期一〜六と数字になりますが、日曜日は「星期日」か「星期天」になり、「星期七」とは表現しません。",
+          },
+          {
+            "quiz": "「2時半」を表す自然なフレーズを選びなさい。\n两点（ ）下课。",
+            "choices": ["三十分", "半", "刻", "分"],
+            "answer": "半",
+            "explanation": "「〜時半」は、時間の後ろにそのまま「半（bàn）」を置くのが一般的で自然です。",
+          },
         ],
       },
       {
         "lesson": 6,
-        "title": "学部・研究・課題",
+        "title": "学部・研究・講義",
         "grammar": [
           {
             "title": "① 習得可能性を示す助動詞「会」",
@@ -912,64 +604,70 @@ class _MyHomePageState extends State<MyHomePage> {
         ],
         "sentences": [
           {
-            "chinese": "你在哪个大学？",
-            "pinyin": "Nǐ zài nǎ ge dàxué?",
-            "japanese": "あなたは大学で何を勉強していますか？",
+            "chinese": "你在大学做什么？",
+            "pinyin": "Nǐ zài dàxué zuò shénme?",
+            "japanese": "あなたは大学で何をしていますか？",
           },
           {
-            "chinese": "我在先进工学研究科学部。",
-            "pinyin": "Wǒ zài xiānjìn gōngxué yánjiū kē xuébù.",
-            "japanese": "私は先進工学研究科学部です。",
+            "chinese": "学先进工学。你呢？",
+            "pinyin": "Xué xiānjìn gōngxué. Nǐ ne?",
+            "japanese": "先進工学を勉強しています。あなたは？",
           },
           {
-            "chinese": "你研究人工智能吗？",
-            "pinyin": "Nǐ yánjiū réngōng zhìnéng ma?",
+            "chinese": "我学人工智能。",
+            "pinyin": "Wǒ xué réngōng zhìnéng.",
             "japanese": "私は人工知能を勉強しています。",
           },
           {
-            "chinese": "对，我研究人工智能。",
-            "pinyin": "Duì, wǒ yánjiū réngōng zhìnéng.",
-            "japanese": "はい、人工知能を勉強しています。",
+            "chinese": "为什么要学先进工学？",
+            "pinyin": "Wèishénme yào xué xiānjìn gōngxué?",
+            "japanese": "なぜ先進工学を勉強するのですか？",
           },
           {
-            "chinese": "你会编写程序吗？",
-            "pinyin": "Nǐ huì biānxiě chéngxù ma?",
-            "japanese": "プログラミングができますか？",
+            "chinese": "因为我想去美国留学。",
+            "pinyin": "Yīnwèi wǒ xiǎng qù Měiguó liúxué.",
+            "japanese": "アメリカに留学したいからです。",
           },
           {
-            "chinese": "对，我会编写程序。",
-            "pinyin": "Duì, wǒ huì biānxiě chéngxù.",
-            "japanese": "はい、プログラミングができます。",
-          },
-          {
-            "chinese": "你在研究新材料吗？",
-            "pinyin": "Nǐ zài yánjiū xīn cáiliào ma?",
-            "japanese": "世界の最新材料を研究したいですか？",
-          },
-          {
-            "chinese": "对，我在研究新材料。",
-            "pinyin": "Duì, wǒ zài yánjiū xīn cáiliào.",
-            "japanese": "はい、新材料を研究しています。",
+            "chinese": "我也想去美国留学。",
+            "pinyin": "Wǒ yě xiǎng qù Měiguó liúxué.",
+            "japanese": "私もアメリカに留学したいです。",
           },
         ],
         "vocabulary": [
           {"word": "学", "pinyin": "xué", "japanese": "学ぶ"},
           {"word": "人工智能", "pinyin": "réngōng zhìnéng", "japanese": "人工知能"},
-          {"word": "会", "pinyin": "huì", "japanese": "〜できる（学習して習得する）"},
-          {"word": "编写", "pinyin": "biānxiě", "japanese": "プログラム作成"},
+          {"word": "会", "pinyin": "huì", "japanese": "〜できる（学習して習得する能力）"},
+          {
+            "word": "编写程序",
+            "pinyin": "biānxiě chéngxù",
+            "japanese": "プログラムを記述する",
+          },
           {"word": "喜欢", "pinyin": "xǐhuan", "japanese": "好きだ"},
-          {"word": "编程", "pinyin": "biānchéng", "japanese": "プログラミングをする"},
+          {"word": "编程", "pinyin": "biānchéng", "japanese": "プログラミング"},
           {"word": "希望", "pinyin": "xīwàng", "japanese": "希望する／望む"},
           {"word": "解决", "pinyin": "jiějué", "japanese": "解決する"},
           {"word": "问题", "pinyin": "wèntí", "japanese": "問題／課題"},
-          {"word": "世界最新", "pinyin": "shìjiè zuìxīn", "japanese": "世界の最新問題"},
+          {"word": "新材料", "pinyin": "xīn cáiliào", "japanese": "新材料"},
           {"word": "具体", "pinyin": "jùtǐ", "japanese": "具体的に"},
           {"word": "研究", "pinyin": "yánjiū", "japanese": "研究する"},
           {"word": "网络", "pinyin": "wǎngluò", "japanese": "ネットワーク"},
-          {"word": "线上", "pinyin": "xiànshàng", "japanese": "ネット上で／オンラインで"},
-          {"word": "宇宙", "pinyin": "yǔzhòu", "japanese": "宇宙"},
-          {"word": "航空", "pinyin": "hángkōng", "japanese": "航空"},
-          {"word": "地球环境", "pinyin": "dìqiú huánjìng", "japanese": "地球環境"},
+          {"word": "课题", "pinyin": "kètí", "japanese": "研究課題 / テーマ"},
+          {"word": "努力", "pinyin": "nǔlì", "japanese": "努力する / 一生懸命やる"},
+        ],
+        "grammar_quizzes": [
+          {
+            "quiz": "「プログラムを書く能力がある（～できる）」を表現する適切な助動詞を選びなさい。\n我（ ）编写程序。",
+            "choices": ["会", "在", "可以", "想"],
+            "answer": "会",
+            "explanation": "学習して獲得した技術的な能力を表す「〜できる」には「会」を使用します。",
+          },
+          {
+            "quiz": "「私は今、新材料を研究している最中です」という進行を表す正しい語順を選びなさい。",
+            "choices": ["我研究新材料在。", "我在研究新材料。", "我新材料在研究。", "在我是研究新材料。"],
+            "answer": "我在研究新材料。",
+            "explanation": "動詞の前に「在」を置くことで、「今〜している最中だ」という動作の進行を表現できます。",
+          },
         ],
       },
       {
@@ -981,46 +679,46 @@ class _MyHomePageState extends State<MyHomePage> {
             "desc": "動作の完了や発生を意味し、「〜した」という過去や事実を述べるときに使います。",
           },
           {
-            "title": "② 正反疑問句（難不難）",
+            "title": "② 正反疑問文（難不難）",
             "desc": "形容詞を肯定と否定の形で並べて並列化し、「〜ですか、そうではないですか」と尋ねる構文です。",
           },
         ],
         "sentences": [
           {
-            "chinese": "今天做实验了吗？",
-            "pinyin": "Jīntiān zuò shíyàn le ma?",
-            "japanese": "今日の実験はしましたか？",
+            "chinese": "今天的实验做完了吗？",
+            "pinyin": "Jīntzān de shíyàn zuòwán le ma?",
+            "japanese": "今日の実験は終わりましたか？",
           },
-          {"chinese": "做了。", "pinyin": "Zuò le.", "japanese": "しました。"},
+          {"chinese": "做完了。", "pinyin": "Zuòwán le.", "japanese": "終わりました。"},
           {
-            "chinese": "实验难不难？",
-            "pinyin": "Shíyàn nán bù nán?",
-            "japanese": "実験は難しいですか？",
-          },
-          {
-            "chinese": "我觉得很难。",
-            "pinyin": "Wǒ juéde hěn nán.",
-            "japanese": "とても難しいと思います。",
+            "chinese": "实验做完了吗？",
+            "pinyin": "Shíyàn zuòwán le ma?",
+            "japanese": "実験は終わりましたか？",
           },
           {
-            "chinese": "实验报告写好了吗？",
-            "pinyin": "Shíyàn bàogào xiě hǎo le ma?",
-            "japanese": "実験レポートは書きましたか？",
+            "chinese": "还没有做完。",
+            "pinyin": "Hái méiyǒu zuòwán.",
+            "japanese": "まだ終わっていません。",
           },
           {
-            "chinese": "还没写好。",
-            "pinyin": "Hái méi xiě hǎo.",
-            "japanese": "まだ書いていません。",
+            "chinese": "实验怎么样？",
+            "pinyin": "Shíyàn zěnmeyàng?",
+            "japanese": "実験はどうでしたか？",
           },
           {
-            "chinese": "你的实验结果怎么样？",
-            "pinyin": "Nǐ de shíyàn jiéguǒ zěnmeyàng?",
-            "japanese": "あなたの実験の結果はどうですか？",
+            "chinese": "非常难。",
+            "pinyin": "Fēicháng nán.",
+            "japanese": "とても難しかったです。",
           },
           {
-            "chinese": "结果不太好。",
-            "pinyin": "Jiéguǒ bú tài hǎo.",
-            "japanese": "少し難しいですが、とてもおもしろいです。",
+            "chinese": "你做报告了吗？",
+            "pinyin": "Nǐ zuò bàogào le ma?",
+            "japanese": "レポートは書きました（提出しました）か？",
+          },
+          {
+            "chinese": "报告也做完了。",
+            "pinyin": "Bàogào yě zuòwán le.",
+            "japanese": "レポートも終わりました。",
           },
         ],
         "vocabulary": [
@@ -1029,28 +727,41 @@ class _MyHomePageState extends State<MyHomePage> {
           {"word": "容易", "pinyin": "róngyì", "japanese": "易しい"},
           {"word": "报告", "pinyin": "bàogào", "japanese": "レポート／報告"},
           {"word": "写", "pinyin": "xiě", "japanese": "書く"},
-          {"word": "怎么样", "pinyin": "zěnmeyàng", "japanese": "どうですか（疑問表現）"},
-          {"word": "虽然", "pinyin": "suīrán", "japanese": "〜だけれども／〜とはいえ"},
-          {"word": "export", "pinyin": "érqiě", "japanese": "少し／ちょっと"},
+          {"word": "怎么样", "pinyin": "zěnmeyàng", "japanese": "どうですか（状態を尋ねる）"},
+          {"word": "虽然", "pinyin": "suīrán", "japanese": "〜だけれども"},
+          {"word": "但是", "pinyin": "dànshì", "japanese": "しかし / けれども"},
           {"word": "有趣", "pinyin": "yǒuqù", "japanese": "おもしろい／興味深い"},
           {"word": "数据", "pinyin": "shùjù", "japanese": "データ"},
-          {"word": "管理", "pinyin": "guǎnlǐ", "japanese": "管理する"},
           {"word": "结果", "pinyin": "jiéguǒ", "japanese": "結果"},
-          {"word": "不错", "pinyin": "búcuò", "japanese": "悪くない"},
+          {"word": "不错", "pinyin": "búcuò", "japanese": "悪くない、素晴らしい"},
           {"word": "作业", "pinyin": "zuòyè", "japanese": "宿題／課題"},
-          {"word": "知道", "pinyin": "zhīdào", "japanese": "知っている／わかる"},
-          {"word": "重要", "pinyin": "zhòngyào", "japanese": "重要だ"},
+          {"word": "写好", "pinyin": "xiěhǎo", "japanese": "書き終える/しっかり書く"},
+          {"word": "还没", "pinyin": "hái méi", "japanese": "まだ〜していない"},
+        ],
+        "grammar_quizzes": [
+          {
+            "quiz": "「実験は難しいですか？」を聞く正反疑問文の形を選びなさい。",
+            "choices": ["实验難吗不難？", "实验难不难？", "实验不难难？", "实验很难吗？"],
+            "answer": "实验难不难？",
+            "explanation": "形容詞を肯定＋否定（难不难）の形で並べると、文末に「吗」をつけない疑問文（正反疑問文）になります。",
+          },
+          {
+            "quiz": "「私はレポートを書き終えました」という完了を表す「了」の正しい位置を選びなさい。",
+            "choices": ["了我写完报告。", "我了写完报告。", "我写完报告了。", "我写完了报告。"],
+            "answer": "我写完报告了。",
+            "explanation": "文全体の事態の完了や変化の表現として、文末に「了」を置くのが最適です。",
+          },
         ],
       },
       {
         "lesson": 8,
         "title": "能力・可能・許可",
         "grammar": [
+          {"title": "① 能願動詞「会」", "desc": "学習や練習を通じて「（能力的に）〜できる」という意味を表します。"},
           {
-            "title": "① 許可を示す「可以」",
-            "desc": "「〜してもよい」という客観的状況や相手への認可を求めるときに使用します。",
+            "title": "② 能願動詞「可以」",
+            "desc": "条件や環境から判断して「〜できる」、または「〜してもよい（許可）」を表します。",
           },
-          {"title": "② 動作の試行「一下」", "desc": "動詞の後に付け加え、「ちょっと〜してみる」と表現を柔らかくします。"},
         ],
         "sentences": [
           {
@@ -1058,32 +769,22 @@ class _MyHomePageState extends State<MyHomePage> {
             "pinyin": "Nǐ huì biānchéng ma?",
             "japanese": "プログラミングができますか？",
           },
-          {"chinese": "会。", "pinyin": "Huì.", "japanese": "できます。"},
+          {"chinese": "我会。", "pinyin": "Wǒ huì.", "japanese": "はい、できます。"},
           {
-            "chinese": "你会使用这个软件吗？",
-            "pinyin": "Nǐ huì shǐyòng zhège ruǎnjiàn ma?",
-            "japanese": "このソフトを使うことができますか？",
+            "chinese": "你会编程吗？",
+            "pinyin": "Nǐ huì biānchéng ma?",
+            "japanese": "プログラミングができますか？",
+          },
+          {"chinese": "我不会。", "pinyin": "Wǒ bú huì.", "japanese": "いいえ、できません。"},
+          {
+            "chinese": "用这台电脑可以编程吗？",
+            "pinyin": "Yòng zhè tái diànnǎo kěyǐ biānchéng ma?",
+            "japanese": "このパソコンを使ってプログラミングしてもいいですか？",
           },
           {
-            "chinese": "会，我会使用。",
-            "pinyin": "Huì, wǒ huì shǐyòng.",
-            "japanese": "はい、使えます。",
-          },
-          {
-            "chinese": "我可以借用一下这个笔记本吗？",
-            "pinyin": "Wǒ kěyǐ jièyòng yíxià zhège bǐjìběn ma?",
-            "japanese": "このノートを借りてもいいですか？",
-          },
-          {"chinese": "可以。", "pinyin": "Kěyǐ.", "japanese": "いいですよ。"},
-          {
-            "chinese": "我们可以一起做这个项目吗？",
-            "pinyin": "Wǒmen kěyǐ yìqǐ zuò zhège xiàngmù ma?",
-            "japanese": "私たちは一緒にこのプロジェクトをしてもいいですか？",
-          },
-          {
-            "chinese": "当然可以。",
-            "pinyin": "Dāngrán kěyǐ.",
-            "japanese": "もちろんいいですよ。",
+            "chinese": "可以，可以用。",
+            "pinyin": "Kěyǐ, kěyǐ yòng.",
+            "japanese": "いいですよ、使えます。",
           },
         ],
         "vocabulary": [
@@ -1091,169 +792,209 @@ class _MyHomePageState extends State<MyHomePage> {
           {"word": "分析", "pinyin": "fēnxī", "japanese": "分析する"},
           {"word": "使用", "pinyin": "shǐyòng", "japanese": "使用する"},
           {"word": "以后", "pinyin": "yǐhòu", "japanese": "今後／これから"},
-          {"word": "们", "pinyin": "men", "japanese": "〜たち（複数を表す接尾辞）"},
+          {"word": "我们", "pinyin": "wǒmen", "japanese": "私たち"},
           {"word": "一起", "pinyin": "yìqǐ", "japanese": "一緒に"},
-          {"word": "项目", "pinyin": "xiàngmù", "japanese": "プロジェクト"},
+          {"word": "项目", "pinyin": "xiangmù", "japanese": "プロジェクト"},
           {"word": "当然", "pinyin": "dāngrán", "japanese": "もちろん"},
           {"word": "太好了", "pinyin": "tài hǎo le", "japanese": "よかった／最高だ"},
-          {"word": "说话", "pinyin": "shuōhuà", "japanese": "話す"},
-          {"word": "参加", "pinyin": "cānjiā", "japanese": "参加する"},
-          {"word": "课外活動", "pinyin": "kèwài huódòng", "japanese": "課外活動"},
-          {"word": "用", "pinyin": "yòng", "japanese": "使う"},
           {"word": "软件", "pinyin": "ruǎnjiàn", "japanese": "ソフトウェア"},
-          {"word": "设计", "pinyin": "shèjì", "japanese": "設計する／デザインする"},
-          {"word": "程序", "pinyin": "chéngxù", "japanese": "プログラム"},
-          {"word": "太棒了", "pinyin": "tài bàng le", "japanese": "すばらしい／最高だ"},
-          {"word": "日语", "pinyin": "Rìyǔ", "japanese": "日本語"},
+          {"word": "借用", "pinyin": "jièyòng", "japanese": "借りて使う"},
+          {"word": "一下", "pinyin": "yíxià", "japanese": "ちょっと〜してみる（動作を和らげる）"},
+          {"word": "笔记本", "pinyin": "bǐjìběn", "japanese": "ノート/ノートパソコン"},
+          {"word": "中文", "pinyin": "Zhōngwén", "japanese": "中国語(書き言葉・全般)"},
+        ],
+        "grammar_quizzes": [
+          {
+            "quiz": "「このソフトを使ってもいいですか（許可を求める）」を表す正しい助動詞を選びなさい。\n我（ ）使用这个软件吗？",
+            "choices": ["会", "可以", "是", "想"],
+            "answer": "可以",
+            "explanation": "「〜してもよい」という相手からの許可や可能性を求める場合は「可以」を用います。",
+          },
+          {
+            "quiz": "「ちょっと見てみる」のように、動作を和らげて表現する際に入れる言葉を選びなさい。\n我看（ ）。",
+            "choices": ["一下", "个", "会", "在"],
+            "answer": "一下",
+            "explanation": "動詞の直後に「一下（yíxià）」を置くことで、「ちょっと〜してみる」という意味になります。",
+          },
         ],
       },
       {
         "lesson": 9,
         "title": "手順・方法・作業",
         "grammar": [
-          {"title": "① 手段や状態を聞く「怎么」", "desc": "「どのようにして〜するのか」という方法を尋ねる疑問詞です。"},
-          {"title": "② 並行動作「一边〜一边…」", "desc": "2つの動作を同時に進行している状況を描写する際に用います。"},
+          {
+            "title": "① 順序を表す副詞",
+            "desc": "「先……，再……（まず〜して、それから〜する）」を使って、動作の順序を整然と表します。",
+          },
+          {
+            "title": "② 同時動作の表現「一边……一边……」",
+            "desc": "「〜しながら〜する」という、2つの動作が並行して行われる状態を表します。",
+          },
         ],
         "sentences": [
           {
-            "chinese": "今天的实验怎么做？",
-            "pinyin": "Jīntiān de shíyàn zěnme zuò?",
-            "japanese": "今日の実験はどうやってやりますか？",
+            "chinese": "这个实验怎么做？",
+            "pinyin": "Zhè ge shíyàn zěnme zuò?",
+            "japanese": "この実験はどうやりますか？",
           },
           {
             "chinese": "先准备材料，再做实验。",
             "pinyin": "Xiān zhǔnbèi cáiliào, zài zuò shíyàn.",
-            "japanese": "まず材料を準備し、次に実験をします。",
+            "japanese": "まず材料を準備して、次に実験をします。",
           },
-          {"chinese": "然后呢？", "pinyin": "Ránhòu ne?", "japanese": "それからは？"},
+          {"chinese": "然后呢？", "pinyin": "Ránhòu ne?", "japanese": "それから？"},
           {
-            "chinese": "一边记录数据，一边讨论。",
-            "pinyin": "Yìbiān jìlù shùjù, yìbiān tǎolùn.",
-            "japanese": "実験をしながら、データを記録します。",
+            "chinese": "然后记录数据，最后写报告。",
+            "pinyin": "Ránhòu jìlù shùjù, zuìhòu xiě bàogào.",
+            "japanese": "それからデータを記録し、最後にレポートを書きます。",
           },
           {
-            "chinese": "然后分析実験結果。",
-            "pinyin": "Ránhòu fēnxī shíyàn jiéguǒ.",
-            "japanese": "それから実験結果を分析します。",
+            "chinese": "今天的实验怎么做？",
+            "pinyin": "Jīntiān de shíyàn zěnme zuò?",
+            "japanese": "今日の実験はどうやりますか？",
           },
-          {"chinese": "最后呢？", "pinyin": "Zuìhòu ne?", "japanese": "最後は？"},
           {
-            "chinese": "最后写実験報告。",
-            "pinyin": "Zuìhòu xiě shíyàn bàogào.",
-            "japanese": "最後に実験レポートを書きます。",
+            "chinese": "先洗干净，再做实验。",
+            "pinyin": "Xiān xǐ gānjìng, zài zuò shíyàn.",
+            "japanese": "まずきれいに洗ってから、実験をします。",
           },
         ],
         "vocabulary": [
-          {"word": "怎么", "pinyin": "zěnme", "japanese": "どのように"},
+          {"word": "怎么", "pinyin": "zěnme", "japanese": "どのように／どうやって"},
           {"word": "准备", "pinyin": "zhǔnbèi", "japanese": "準備する"},
-          {"word": "材料", "pinyin": "cáiliào", "japanese": "材料"},
+          {"word": "材料", "pinyin": "cāiliào", "japanese": "材料"},
           {"word": "记录", "pinyin": "jìlù", "japanese": "記録する"},
-          {"word": "时间", "pinyin": "shíjiān", "japanese": "時／時間"},
-          {"word": "安排", "pinyin": "ānpái", "japanese": "予定を立てる"},
+          {"word": "时候", "pinyin": "shíhou", "japanese": "時／時間"},
+          {"word": "安排", "pinyin": "ānpái", "japanese": "手配する／計画する"},
           {"word": "打工", "pinyin": "dǎgōng", "japanese": "アルバイトをする"},
           {"word": "回家", "pinyin": "huíjiā", "japanese": "家に帰る"},
           {"word": "休息", "pinyin": "xiūxi", "japanese": "休む"},
           {"word": "听音乐", "pinyin": "tīng yīnyuè", "japanese": "音楽を聴く"},
           {"word": "看漫画", "pinyin": "kàn mànhuà", "japanese": "漫画を読む"},
           {"word": "喝咖啡", "pinyin": "hē kāfēi", "japanese": "コーヒーを飲む"},
-          {"word": "看电视", "pinyin": "kàn diànshì", "japanese": "テレビを見る"},
-          {"word": "吃晚饭", "pinyin": "chī wǎnfàn", "japanese": "ご飯を食べる"},
-          {"word": "起床", "pinyin": "qǐchuáng", "japanese": "起床する"},
-          {"word": "洗澡", "pinyin": "xǐzǎo", "japanese": "シャワーを浴びる"},
+          {"word": "吃饭", "pinyin": "chīfàn", "japanese": "ご飯を食べる"},
+          {"word": "起床", "pinyin": "qǐchuáng", "japanese": "起きる"},
+          {"word": "洗澡", "pinyin": "xǐzǎo", "japanese": "お風呂に入る／シャワーを浴びる"},
           {"word": "睡觉", "pinyin": "shuìjiào", "japanese": "寝る"},
+        ],
+        "grammar_quizzes": [
+          {
+            "quiz": "「まず材料を準備して、それから実験をする」の正しい語順表現を選びなさい。",
+            "choices": [
+              "先准备材料，再做实验。",
+              "再准备材料，先做实验。",
+              "先做实验，再准备材料。",
+              "准备材料先，做实验再。",
+            ],
+            "answer": "先准备材料，再做实验。",
+            "explanation": "「先……，再……」の組み合わせで「まず〜して、次に〜する」という作業手順を表せます。",
+          },
+          {
+            "quiz": "「音楽を聴きながらコーヒーを飲む」という同時動作の正しい構文を選びなさい。\n我（ ）听音乐（ ）喝咖啡。",
+            "choices": ["先……再……", "一边……一边……", "有的……有的……", "然后……最后……"],
+            "answer": "一边……一边……",
+            "explanation": "「一边 + 動作A + 一边 + 動作B」で「〜しながら〜する」という並行処理を表せます。",
+          },
         ],
       },
       {
         "lesson": 10,
         "title": "希望・将来・進路",
         "grammar": [
+          {"title": "① 能願動詞「想」", "desc": "「〜したい」という主観的な希望や願望を表します。否定は「不想」です。"},
           {
-            "title": "① 希望を伴う助動詞「想」",
-            "desc": "「〜したい」という自身の意志や希望を動詞の前に置いて明示します。",
-          },
-          {
-            "title": "② 職務を担う「当」",
-            "desc": "「〜の役割につく」「〜になる」として将来の夢や職業を述べるときに用います。",
+            "title": "② 「打算」による計画の表現",
+            "desc": "「〜するつもりだ／〜する予定だ」という、具体的な予定を表します。",
           },
         ],
         "sentences": [
           {
-            "chinese": "将来你想做什么？",
-            "pinyin": "Jiānglái nǐ xiǎng zuò shénme?",
-            "japanese": "将来、何をしたいですか？",
+            "chinese": "你将来想做什么？",
+            "pinyin": "Nǐ jiānglái xiǎng zuò shénme?",
+            "japanese": "将来は何をしたいですか？",
           },
           {
-            "chinese": "我想当一名科学家。",
-            "pinyin": "Wǒ xiǎng dāng yì míng kēxuéjiā.",
-            "japanese": "科学者なりたいです。",
+            "chinese": "我想当工程师。你呢？",
+            "pinyin": "Wǒ xiǎng dāng gōngchengshī. Nǐ ne?",
+            "japanese": "私はエンジニアになりたいです。あなたは？",
           },
           {
-            "chinese": "我想当一名工程师。",
-            "pinyin": "Wǒ xiǎng dāng yì míng gōngchéngshī.",
-            "japanese": "エンジニアになりたいです。",
+            "chinese": "我想学大数据。",
+            "pinyin": "Wǒ xiǎng xué dàshùjù.",
+            "japanese": "私はビッグデータを学びたいです。",
           },
           {
-            "chinese": "那你毕业以后想做什么？",
-            "pinyin": "Nà nǐ bìyè yǐhòu xiǎng zuò shénme?",
-            "japanese": "では、あなたは卒業したら何をしたいですか？",
+            "chinese": "毕业以后有什么打算？",
+            "pinyin": "Bìyè yǐhòu yǒu shénme dǎsuàn?",
+            "japanese": "卒業した後はどんな予定ですか？",
           },
           {
-            "chinese": "我想去美国留学。",
-            "pinyin": "Wǒ xiǎng qù Měiguó liúxué.",
-            "japanese": "アメリカに留学したいです。",
+            "chinese": "我打算去美国留学。",
+            "pinyin": "Wǒ dǎsuàn qù Měiguó liúxué.",
+            "japanese": "アメリカに留学するつもりです。",
           },
           {
-            "chinese": "我想先积累经验，然后自己創業。",
-            "pinyin": "Wǒ xiǎng xiān jīlěi jīngyàn, ránhòu zìjǐ chuàngyè.",
-            "japanese": "まず経験を積んで、その後、起業する予定です。",
-          },
-          {
-            "chinese": "祝你们愿望成真。",
-            "pinyin": "Zhù nǐmen yuànwàng chéng zhēn.",
-            "japanese": "皆さんの願いがかないますように。",
+            "chinese": "祝你们成功！",
+            "pinyin": "Zhù nǐmen chénggōng!",
+            "japanese": "皆さんの成功を祈っています！",
           },
         ],
         "vocabulary": [
           {"word": "将来", "pinyin": "jiānglái", "japanese": "将来"},
-          {"word": "当", "pinyin": "dāng", "japanese": "〜になる"},
-          {"word": "名", "pinyin": "míng", "japanese": "〜名（職業を持つ人を数える数詞）"},
+          {"word": "当", "pinyin": "dāng", "japanese": "〜になる（職業など）"},
           {"word": "科学家", "pinyin": "kēxuéjiā", "japanese": "科学者"},
           {"word": "工程师", "pinyin": "gōngchéngshī", "japanese": "エンジニア"},
           {"word": "毕业", "pinyin": "bìyè", "japanese": "卒業する"},
           {"word": "去", "pinyin": "qù", "japanese": "行く"},
           {"word": "美国", "pinyin": "Měiguó", "japanese": "アメリカ"},
           {"word": "留学", "pinyin": "liúxué", "japanese": "留学する"},
-          {"word": "积累", "pinyin": "jīlěi", "japanese": "積む／重ねる"},
-          {"word": "经验", "pinyin": "jīngyàn", "japanese": "経験"},
-          {"word": "创业", "pinyin": "chuàngyè", "japanese": "起業する"},
-          {"word": "祝", "pinyin": "zhù", "japanese": "祈る"},
-          {"word": "愿望", "pinyin": "yuànwàng", "japanese": "願い／かなう"},
-          {
-            "word": "心想事成",
-            "pinyin": "xīn xiǎng shì chéng",
-            "japanese": "思い通りになる",
-          },
+          {"word": "希望", "pinyin": "xīwàng", "japanese": "希望する"},
+          {"word": "研究", "pinyin": "yánjiū", "japanese": "研究する"},
+          {"word": "制造", "pinyin": "zhìzào", "japanese": "製造する／作る"},
+          {"word": "机器人", "pinyin": "jīqìrén", "japanese": "ロボット"},
+          {"word": "打算", "pinyin": "dǎsuàn", "japanese": "〜するつもり／予定"},
+          {"word": "住", "pinyin": "zhù", "japanese": "住む"},
+          {"word": "航天员", "pinyin": "hángtiānyuán", "japanese": "宇宙飛行士"},
+          {"word": "心愿", "pinyin": "xīnyuàn", "japanese": "願い／望み"},
           {"word": "教授", "pinyin": "jiàoshòu", "japanese": "教授"},
+          {"word": "成功", "pinyin": "chénggōng", "japanese": "成功する"},
           {"word": "研究员", "pinyin": "yánjiūyuán", "japanese": "研究員"},
+        ],
+        "grammar_quizzes": [
+          {
+            "quiz": "「エンジニアになりたい」という時の適切な動詞を選びなさい。\n我想（ ）工程师。",
+            "choices": ["是", "叫", "当", "在"],
+            "answer": "当",
+            "explanation": "役割や職業に「〜になる、〜として働く」という場合は動詞「当（dāng）」を使います。",
+          },
+          {
+            "quiz": "「私はアメリカに留学する【予定です】」と計画・予定を述べる表現を選びなさい。\n我（ ）去美国留学。",
+            "choices": ["打算", "会", "可以", "在"],
+            "answer": "打算",
+            "explanation": "あらかじめ考えているスケジュールや予定・計画を表明するときは「打算（dǎsuàn）」を使います。",
+          },
         ],
       },
       {
         "lesson": 11,
-        "title": "変化・成果・結果",
+        "title": "変化・完成・結果",
         "grammar": [
           {
-            "title": "① 結果補語「完」と「好」",
-            "desc": "動詞に接続して、動作が完全に終わる（完）、または十分に満足いく形に仕上がる（好）状態を示します。",
+            "title": "① 事態の変化を表す文末の「了」",
+            "desc": "文の終わりに「了」をつけることで、「新しい状況になった」「変化が生じた」ことを示します。",
           },
-          {"title": "② すでに行われた「已经」", "desc": "過去の出来事や変化がすでに発生していることを表す副詞です。"},
+          {
+            "title": "② 結果補語",
+            "desc": "動詞の直後に別の動詞や形容詞を補語として置き、動作の結果どうなったか（例: 目的の達成「到」）を表します。",
+          },
         ],
         "sentences": [
           {
             "chinese": "实验做完了吗？",
-            "pinyin": "Shíyàn zuò wán le ma?",
-            "japanese": "実験はやり終わりましたか？",
+            "pinyin": "Shíyàn zuòwán le ma?",
+            "japanese": "実験は終わりましたか？",
           },
-          {"chinese": "做完了。", "pinyin": "Zuò wán le.", "japanese": "やり終わりました。"},
+          {"chinese": "做完了。", "pinyin": "Zuòwán le.", "japanese": "終わりました。"},
           {
             "chinese": "结果怎么样？",
             "pinyin": "Jiéguǒ zěnmeyàng?",
@@ -1262,28 +1003,14 @@ class _MyHomePageState extends State<MyHomePage> {
           {
             "chinese": "温度提高了，反应变快了。",
             "pinyin": "Wēndù tígāo le, fǎnyìng biàn kuài le.",
-            "japanese": "温度が上がったら、反応が速くなりました。",
+            "japanese": "温度が上がって、反応が速くなりました。",
           },
           {
-            "chinese": "报告写好了吗？",
-            "pinyin": "Bàogào xiě hǎo le ma?",
-            "japanese": "レポートはちゃんと書き上げましたか？",
+            "chinese": "数据找到了吗？",
+            "pinyin": "Shùjù zhǎodào le ma?",
+            "japanese": "データは見つかりましたか？",
           },
-          {
-            "chinese": "忙着写呢，不过数据已经分析好了。",
-            "pinyin": "Máng zhe xiě ne, búguò shùjù yǐjīng fēnxī hǎo le.",
-            "japanese": "まだ書き上げていませんが、データはすでに分析し終わりました。",
-          },
-          {
-            "chinese": "那，实验算成功了吗？",
-            "pinyin": "Nà, shíyàn suàn chénggōng le ma?",
-            "japanese": "では、実験は成功しましたか？",
-          },
-          {
-            "chinese": "基本上成功了，结果很不错。",
-            "pinyin": "Jīběnshàng chénggōng le, jiéguǒ hěn búcuò.",
-            "japanese": "おおむね成功しました。結果は悪くないです。",
-          },
+          {"chinese": "找到了。", "pinyin": "Zhǎodào le.", "japanese": "見つかりました。"},
         ],
         "vocabulary": [
           {"word": "做完", "pinyin": "zuòwán", "japanese": "やり終える"},
@@ -1292,238 +1019,272 @@ class _MyHomePageState extends State<MyHomePage> {
           {"word": "反应", "pinyin": "fǎnyìng", "japanese": "反応"},
           {"word": "变", "pinyin": "biàn", "japanese": "変わる"},
           {"word": "快", "pinyin": "kuài", "japanese": "速い"},
-          {"word": "写好", "pinyin": "xiěhǎo", "japanese": "書き上げる"},
-          {"word": "不过", "pinyin": "búguò", "japanese": "ただし"},
-          {"word": "已经", "pinyin": "yǐjīng", "japanese": "すでに"},
+          {"word": "找到", "pinyin": "zhǎodào", "japanese": "見つける／探し当てる"},
+          {"word": "不过", "pinyin": "búguò", "japanese": "ただし／でも"},
+          {"word": "一切", "pinyin": "yíqiè", "japanese": "すべて"},
           {"word": "成功", "pinyin": "chénggōng", "japanese": "成功する"},
-          {"word": "基本", "pinyin": "jīběn", "japanese": "だいたい／ほぼ／おおむね"},
+          {"word": "基本", "pinyin": "jīběn", "japanese": "だいたい／基本ね"},
           {"word": "看到", "pinyin": "kàndào", "japanese": "見える"},
-          {"word": "完好", "pinyin": "wánhǎo", "japanese": "書き終える"},
+          {"word": "完成", "pinyin": "wánchéng", "japanese": "完成する"},
           {"word": "下降", "pinyin": "xiàjiàng", "japanese": "下がる"},
           {"word": "慢", "pinyin": "màn", "japanese": "遅い"},
           {"word": "失败", "pinyin": "shībài", "japanese": "失敗する"},
-          {"word": "上完", "pinyin": "shàngwán", "japanese": "授業／日程などを終える"},
+          {"word": "上拉", "pinyin": "shàngwǎn", "japanese": "回復／引き上げる"},
           {"word": "水平", "pinyin": "shuǐpíng", "japanese": "レベル"},
+        ],
+        "grammar_quizzes": [
+          {
+            "quiz": "「データが（探した結果）見つかりました」という結果補語を含む表現を選びなさい。\n数据（ ）了。",
+            "choices": ["找在", "找到", "找会", "找好"],
+            "answer": "找到",
+            "explanation": "探すという動作の目的が達成され、「見つかる」ことを表す結果補語は「到」です。",
+          },
+          {
+            "quiz": "「温度が上がりました（以前より高い状態に変化した）」を意味する正しい表現を選びなさい。",
+            "choices": ["温度提高在。", "温度提高了。", "提高温度在。", "温度会提高。"],
+            "answer": "温度提高了。",
+            "explanation": "文末の「了」は、これまでとは違った新しい状態への「変化」を指し示します。",
+          },
         ],
       },
       {
         "lesson": 12,
-        "title": "比較・判断・判定",
+        "title": "比較・判断・判別",
         "grammar": [
-          {"title": "① 比較表現「A 比 B + 形容詞」", "desc": "「AはBより〜だ」という定番の比較文を構成します。"},
-          {"title": "② 同等比較「跟〜一样」", "desc": "「〜と同じくらいである」という等価の関係を構築する表現です。"},
+          {
+            "title": "① 比較を表現する「比」",
+            "desc": "「A 比 B + 形容詞」の形で「AはBより〜だ」という比較文を作ります。",
+          },
+          {
+            "title": "② 比較の否定表現「没有」",
+            "desc": "「A 没有 B + 形容詞」で「AはBほど〜ではない」という否定の比較になります。",
+          },
+          {
+            "title": "③ 範囲を制限する副詞「最」",
+            "desc": "形容詞の前に「最」を置くことで、「もっとも〜だ」という最上級の表現になります。",
+          },
         ],
         "sentences": [
           {
-            "chinese": "这个问题门槛难不难？",
-            "pinyin": "Zhège wèntí ménkǎn nán bù nán?",
-            "japanese": "この提案は、あの提案より難しいですか？",
+            "chinese": "这台电脑比那台好吗？",
+            "pinyin": "Zhè tái diànnǎo bǐ nà tái hǎo ma?",
+            "japanese": "このパソコンはあのパソコンより良いですか？",
           },
           {
-            "chinese": "这个提案不比那个提案难。",
-            "pinyin": "Zhège tí'àn bù bǐ nàge tí'àn nán.",
-            "japanese": "この提案はあの提案ほど難しくありません。",
+            "chinese": "对，这台比那台更好一点儿。",
+            "pinyin": "Duì, zhè tái bǐ nà tái gèng hǎo yìdiǎnr.",
+            "japanese": "はい、このほうが少し性能が良いです。",
           },
           {
-            "chinese": "你辛苦了？",
-            "pinyin": "Nǐ xīnkǔ le?",
-            "japanese": "（宿題は多いですか？）",
+            "chinese": "这台电脑贵不贵？",
+            "pinyin": "Zhè tái diànnǎo guì bú guì?",
+            "japanese": "このパソコンは高いですか？",
           },
           {
-            "chinese": "这门的作业比化学门更难。",
-            "pinyin": "Zhè mén de zuòyè bǐ huàxué mén gèng nán.",
-            "japanese": "この課題のほうが化学よりさらに難しいです。",
+            "chinese": "不贵，这台没有那台贵。",
+            "pinyin": "Bú guì, zhè tái méiyǒu nà tái guì.",
+            "japanese": "高くないです、これはあれほど高くありません。",
           },
           {
-            "chinese": "小组概念呢？",
-            "pinyin": "Gǔlùpu kànjiàn ne?",
-            "japanese": "（グループ発表は？）",
+            "chinese": "哪台电脑最好用？",
+            "pinyin": "Nǎ tái diànnǎo zuì hǎoyòng?",
+            "japanese": "どのパソコンが一番使いやすいですか？",
           },
           {
-            "chinese": "这门课题跟那一门一样难。",
-            "pinyin": "Zhè mén kètí gēn nà yì mén yíyàng nán.",
-            "japanese": "この課題はあの課題と同じくらい難しいです。",
-          },
-          {
-            "chinese": "你觉得空调重要吗？",
-            "pinyin": "Nǐ juéde kōngtiáo zhòngyào ma?",
-            "japanese": "（この技術が一番役に立つと思いますか？）",
-          },
-          {
-            "chinese": "我认为这些研究里这个最实用。",
-            "pinyin": "Wǒ rènwéi zhèxiē yánjiū lǐ zhège zuì shíyòng.",
-            "japanese": "この研究が一番役に立つと思います。",
+            "chinese": "这台新电脑最好用。",
+            "pinyin": "Zhè tái xīn diànnǎo zuì hǎoyòng.",
+            "japanese": "この新しいパソコンが一番使いやすいです。",
           },
         ],
         "vocabulary": [
-          {"word": "这门课", "pinyin": "zhè mén kè", "japanese": "この授業"},
+          {"word": "这台电脑", "pinyin": "zhè tái diànnǎo", "japanese": "このパソコン"},
           {"word": "比", "pinyin": "bǐ", "japanese": "より（比較）"},
-          {"word": "难", "pinyin": "nán", "japanese": "難しい"},
-          {"word": "门", "pinyin": "mén", "japanese": "授業／教科を数える単位"},
-          {"word": "没有", "pinyin": "méiyǒu", "japanese": "ほどではない（比較の否定）"},
           {"word": "更", "pinyin": "gèng", "japanese": "さらに"},
+          {"word": "门", "pinyin": "mén", "japanese": "授業／教科を数える単位"},
+          {"word": "没有", "pinyin": "méiyou", "japanese": "ほどではない（比較の否定）"},
           {"word": "小组", "pinyin": "xiǎozǔ", "japanese": "グループ"},
-          {"word": "发表", "pinyin": "fābiǎo", "japanese": "発表／発表する"},
-          {"word": "一样", "pinyin": "yíyàng", "japanese": "同じ"},
-          {"word": "最门课", "pinyin": "zuì mén kè", "japanese": "どの授業"},
-          {"word": "有用", "pinyin": "yǒuyòng", "japanese": "役に立つ"},
-          {"word": "对", "pinyin": "duì", "japanese": "そうだと／満足だ（肯定の返答）"},
-          {"word": "几个", "pinyin": "jǐ gè", "japanese": "少し"},
+          {"word": "发展", "pinyin": "fāzhǎn", "japanese": "発表／発表する"},
+          {"word": "一模一样", "pinyin": "yìmú yíyàng", "japanese": "同じ"},
+          {"word": "最", "pinyin": "zuì", "japanese": "もっとも"},
+          {"word": "难度", "pinyin": "nándù", "japanese": "難度"},
+          {"word": "好用", "pinyin": "hǎoyòng", "japanese": "使いやすい"},
+          {"word": "对", "pinyin": "duì", "japanese": "正しい／その通り"},
+          {"word": "有数", "pinyin": "yǒushù", "japanese": "目途が立っている / 把握している"},
+          {"word": "一个", "pinyin": "yígè", "japanese": "1つ"},
           {"word": "个人", "pinyin": "gèrén", "japanese": "個人"},
-          {"word": "不", "pinyin": "bù", "japanese": "いいえ（特定の文型で否定に用いる）"},
-          {"word": "实用", "pinyin": "shíyòng", "japanese": "実用的だ"},
+          {"word": "不", "pinyin": "bù", "japanese": "いいえ"},
+          {"word": "实用", "pinyin": "shíyòng", "japanese": "実用的"},
           {"word": "别", "pinyin": "bié", "japanese": "ほかの"},
+        ],
+        "grammar_quizzes": [
+          {
+            "quiz": "「このパソコンはあのパソコンよりも良い」という比較文の正しい構造を選びなさい。",
+            "choices": ["这台电脑比那台好。", "这台电脑那台比好。", "比这台电脑那台好。", "这台电脑好比那台。"],
+            "answer": "这台电脑比那台好。",
+            "explanation": "比較を表す際は「A 比 B + 形容詞」という基本語順に当てはめて文章を作ります。",
+          },
+          {
+            "quiz": "「このパソコンはあのパソコンほど高くない」という否定の比較表現を選びなさい。\n这台电脑（ ）那台贵。",
+            "choices": ["不比", "没有", "不是", "不"],
+            "answer": "没有",
+            "explanation": "「A 没有 B + 形容詞」の構文で、「AはBほど〜ではない」という否定比較になります。",
+          },
         ],
       },
       {
         "lesson": 13,
         "title": "条件・仮定・証明",
         "grammar": [
-          {"title": "① 仮定文「如果〜」", "desc": "「もし〜ならば」という仮定の状況を作ります。"},
           {
-            "title": "② 唯一条件の限定「只有〜才…」",
-            "desc": "「〜してはじめて…できる」という必須かつ唯一の制約を提示する構文です。",
+            "title": "① 仮定を表現する「如果……就……」",
+            "desc": "「もし〜ならば、そのときは〜する」という条件と結果を繋ぐ仮定文を構築します。",
+          },
+          {
+            "title": "② 「只要……就……」による必要条件",
+            "desc": "「〜しさえすれば、すぐに〜になる」という、十分な条件を提示する表現です。",
           },
         ],
         "sentences": [
           {
-            "chinese": "如果有留学的机会，你想去吗？",
-            "pinyin": "Rúguǒ yǒu liúxué de jīhuì, nǐ xiǎng qù ma?",
-            "japanese": "（もし日本留学のチャンスがあったら、申請したいですか？）",
+            "chinese": "如果实验成功了，你会做什么？",
+            "pinyin": "Rúguǒ shíyàn chénggōng le, nǐ huì zuò shénme?",
+            "japanese": "もし実験が成功したら、あなたは何をしますか？",
           },
           {
-            "chinese": "如果有机会，我一定去。",
-            "pinyin": "Rúguǒ yǒu jīhuì, wǒ yídìng qù.",
-            "japanese": "チャンスがあれば、必ず行きます。",
+            "chinese": "如果成功了，我一定请客。",
+            "pinyin": "Rúguǒ ... 一定请客。",
+            "japanese": "もし成功したら、必ずおごりますよ。",
           },
           {
-            "chinese": "要是你想去美国大学，你需要……",
-            "pinyin": "Yàoshi nǐ xiǎng qù Měiguó dàxué, nǐ xūyào...",
-            "japanese": "（もしアメリカの大学なら、私は心の準備をします。）",
+            "chinese": "如果失败了呢？",
+            "pinyin": "Rúguǒ shībài le ne?",
+            "japanese": "もし失敗したら？",
           },
           {
-            "chinese": "只要好好学习，一定能通过。",
-            "pinyin": "Zhǐyào hǎohǎo xuéxí, yídìng néng tōngguò.",
-            "japanese": "（アメリカの大学に行くには、試験を受けなければいけませんか？）",
+            "chinese": "如果失败了，就重新再做。",
+            "pinyin": "Rúguǒ shībài le, jiù chóngxīn zài zuò.",
+            "japanese": "もし失敗したら、もう一度やり直します。",
           },
           {
-            "chinese": "对，我想申请研究员。",
-            "pinyin": "Duì, wǒ xiǎng shēnqǐng yánjiūyuán.",
-            "japanese": "（はい、アメリカで研究留学を申請したいです。）",
+            "chinese": "只要努力，就一定能成功吗？",
+            "pinyin": "Zhǐyào nǔlì, jiù yídìng néng chénggōng ma?",
+            "japanese": "努力しさえすれば、必ず成功できますか？",
           },
           {
-            "chinese": "只有通过考试，才能申请。",
-            "pinyin": "Zhǐyǒu tōngguò kǎoshì, cáinéng shēnqǐng.",
-            "japanese": "（試験に合格してはじめて、申請できます。）",
+            "chinese": "对，只要努力，就一定能成功.",
+            "pinyin": "Duì, zhǐyào nǔlì, jiù yídìng néng chénggōng.",
+            "japanese": "はい、努力さえすれば必ず成功できます。",
           },
         ],
         "vocabulary": [
-          {"word": "明年", "pinyin": "míngnián", "japanese": "来年"},
-          {"word": "机会", "pinyin": "jīhuì", "japanese": "機会"},
-          {"word": "申请", "pinyin": "shēnqǐng", "japanese": "申請する／応募する"},
-          {"word": "条件", "pinyin": "tiáojiàn", "japanese": "条件"},
-          {"word": "合适", "pinyin": "héshì", "japanese": "適当な／合う／ひったり"},
-          {"word": "一定", "pinyin": "yídìng", "japanese": "きっと／必ず"},
-          {"word": "努力", "pinyin": "nǔlì", "japanese": "努力する"},
-          {"word": "实现", "pinyin": "shíxiàn", "japanese": "実現する"},
-          {"word": "目的", "pinyin": "mùdì", "japanese": "目的"},
-          {"word": "标准", "pinyin": "biāozhǔn", "japanese": "基準"},
+          {"word": "如果", "pinyin": "rúguǒ", "japanese": "もし〜なら"},
+          {"word": "成功", "pinyin": "chenggōng", "japanese": "成功する"},
+          {"word": "一定", "pinyin": "yídìng", "japanese": "必ず"},
+          {"word": "请客", "pinyin": "qǐngkè", "japanese": "おごる／ごちそうする"},
+          {"word": "就", "pinyin": "jiù", "japanese": "すぐに／そのとき"},
+          {"word": "重新", "pinyin": "chóngxīn", "japanese": "改めて／もう一度"},
           {"word": "只要", "pinyin": "zhǐyào", "japanese": "〜でありさえすれば"},
-          {"word": "生病", "pinyin": "shēngbìng", "japanese": "病気になる"},
-          {"word": "考试", "pinyin": "kǎoshì", "japanese": "試験"},
-          {"word": "取得", "pinyin": "qǔdé", "japanese": "取れる"},
-          {"word": "学分", "pinyin": "xuéfēn", "japanese": "単位"},
+          {"word": "努力", "pinyin": "nǔlì", "japanese": "努力する"},
+          {"word": "能", "pinyin": "néng", "japanese": "〜できる"},
+          {"word": "条件", "pinyin": "tiáojiàn", "japanese": "条件"},
           {"word": "合格", "pinyin": "hégé", "japanese": "合格する"},
-          {"word": "成绩", "pinyin": "chéngjī", "japanese": "成績"},
-          {"word": "优秀", "pinyin": "yōuxiù", "japanese": "優秀だ"},
-          {"word": "都", "pinyin": "dōu", "japanese": "すべて／みな（全部を包含する）"},
+          {"word": "通过", "pinyin": "tōngguò", "japanese": "パスする／合格する"},
+          {"word": "重做", "pinyin": "chóngzuò", "japanese": "やり直す"},
+          {"word": "修正", "pinyin": "xiūzhèng", "japanese": "修正する"},
+          {"word": "数据", "pinyin": "shùjù", "japanese": "データ"},
+          {
+            "word": "只要……就……",
+            "pinyin": "zhǐyào... jiù...",
+            "japanese": "条件・必要規定",
+          },
+          {
+            "word": "如果……就……",
+            "pinyin": "rúguǒ... jiù...",
+            "japanese": "条件・仮定規定",
+          },
+          {
+            "word": "只有……才……",
+            "pinyin": "zhǐyǒu... cái...",
+            "japanese": "条件・結果限定",
+          },
+        ],
+        "grammar_quizzes": [
+          {
+            "quiz":
+                "「【もし】実験が失敗したら、【そのときは】やり直す」という仮定文の正しいセットを選びなさい。\n（ ）失败了，（ ）重新再做。",
+            "choices": ["只要……就……", "如果……就……", "虽然……但是……", "因为……所以……"],
+            "answer": "如果……就……",
+            "explanation": "「如果……，就……」で「もし〜なら、〜する」という仮定を表す構文を形成します。",
+          },
+          {
+            "quiz": "「努力【さえすれば】、必ず成功できる」という表現を選びなさい。\n（ ）努力，就一定能成功。",
+            "choices": ["如果", "只要", "因为", "虽然"],
+            "answer": "只要",
+            "explanation": "「只要……，就……」で「〜しさえすれば、必ず〜となる」という条件規定を表せます。",
+          },
         ],
       },
       {
         "lesson": 14,
-        "title": "総合・スピーチ・スピーキング",
+        "title": "総合学習",
         "grammar": [
           {
-            "title": "① スピーチ冒頭の「大家好」",
-            "desc": "聴衆全員に向けて「皆様こんにちは」と挨拶する際の定型フレーズです。",
+            "title": "① 長文の読解と要約",
+            "desc": "これまでに学んだ文法（是、在、有、了、想、比など）を総合して、自己紹介や大学生活を包括的に表現します。",
           },
           {
-            "title": "② 目的や理由を示す「为了」",
-            "desc": "「〜のために」と、目指すべき方向性や理由を提示して文頭に置くことで強い動機を示します。",
+            "title": "② 将来への展望のまとめ",
+            "desc": "目的、予定、能力を論理的に繋げて、自分の言葉でスピーチや作文を行う総仕上げを行います。",
           },
         ],
         "sentences": [
           {
             "chinese": "大家好！",
             "pinyin": "Dàjiā hǎo!",
-            "japanese": "みなさん、こんにちは。",
+            "japanese": "みなさん、こんにちは！",
           },
           {
-            "chinese": "我是林静。",
-            "pinyin": "Wǒ饰 Lín Jìng.",
-            "japanese": "私は林静といいます。",
+            "chinese": "我来自我介绍一下。",
+            "pinyin": "Wǒ lái zìwǒ jièshào yíxià.",
+            "japanese": "自己紹介をさせていただきます。",
           },
           {
-            "chinese": "我是日本人，今年十九岁。",
-            "pinyin": "Wǒ shì Rìběnrén, jīnnián shíjiǔ suì.",
-            "japanese": "私は日本人です。今年19歳です。",
-          },
-          {
-            "chinese": "我家有四口人。爸爸、妈妈、姐姐和我。",
-            "pinyin": "Wǒ jiā yǒu sì kǒu rén. Bàba, māma, jiějie hé wǒ.",
-            "japanese": "4人家族です。父、母、姉と私です。",
-          },
-          {
-            "chinese": "我是一名大学一年级的学生。",
-            "pinyin": "Wǒ饰 yì míng dàxué yī niánjí de xuésheng.",
-            "japanese": "私は大学1年生です。",
-          },
-          {
-            "chinese": "在大学学先进工学，专业是化学。",
-            "pinyin": "Zài dàxué xué xiānjìn gōngxué, zhuānyè shì huàxué.",
-            "japanese": "大学では先進工学を学んでおり、専門は化学です。",
-          },
-          {
-            "chinese": "我觉得化学很有趣，虽然有点难，但非常有意思。",
+            "chinese": "我叫田中太郎，是先进工学部の学生。",
             "pinyin":
-                "Wǒ juéde huàxué hěn yǒuqù, suīrán yǒudiǎn nán, dàn fēicháng yǒuyìsi.",
-            "japanese": "化学は学ぶことが多くて、とてもおもしろいです。（少し難しいですが、とてもおもしろいと思います。）",
+                "Wǒ jiào Tiánzhōng Tàiláng, shì xiānjìn gōngxuébù de xuésheng.",
+            "japanese": "私は田中太郎といいます。先進工学部の学生です。",
           },
           {
-            "chinese": "我有中国朋友。我跟他常说汉语。",
-            "pinyin": "Wǒ yǒu Zhōngguó péngyou. Wǒ gēn tā cháng shuō Hànyǔ.",
-            "japanese": "私には中国人の友達がいます。（私は彼といつも中国語を話しています。）",
+            "chinese": "我的专业は人工智能。",
+            "pinyin": "Wǒ de zhuānyè shì réngōng zhìnéng.",
+            "japanese": "専門は人工知能です。",
           },
           {
-            "chinese": "我喜欢跟中国朋友交流。",
-            "pinyin": "Wǒ xǐhuan gēn Zhōngguó péngyou jiāoliú.",
-            "japanese": "私は中国人の友達と交流するのが好きです。",
+            "chinese": "我觉得先进工学非常重要。",
+            "pinyin": "Wǒ juéde xiānjìn gōngxué fēicháng zhòngyào.",
+            "japanese": "先進工学は非常に重要だと思います。",
           },
           {
-            "chinese": "为了这个梦想，我要努力学好汉语。",
-            "pinyin": "Wèi le zhège mèngxiǎng, wǒ yào nǔlì xuéhǎo Hànyǔ.",
-            "japanese": "この夢を実現するために、中国語を一生懸命勉強しなければなりません。",
+            "chinese": "为了实现我的梦想，我想去美国留学。",
+            "pinyin":
+                "Wèile shíxiàn wǒ de mèngxiǎng, wǒ xiǎng qù Měiguó liúxué.",
+            "japanese": "夢を実現するために、アメリカへ留学したいと考えています。",
           },
           {
-            "chinese": "我的发表完了。谢谢大家！",
-            "pinyin": "Wǒ de fābiǎo wán le. Xièxie dàjiā!",
-            "japanese": "発表は以上です。ありがとうございました！",
+            "chinese": "谢谢大家！",
+            "pinyin": "Xièxie dàjiā!",
+            "japanese": "ありがとうございました！",
           },
         ],
         "vocabulary": [
           {"word": "大家", "pinyin": "dàjiā", "japanese": "みなさん"},
-          {"word": "日本人", "pinyin": "Rìběnrén", "japanese": "日本人"},
-          {"word": "姐姐", "pinyin": "jiějie", "japanese": "姉"},
+          {"word": "自我是", "pinyin": "zìwǒshì", "japanese": "自己紹介／〜である"},
+          {"word": "紹介", "pinyin": "jièshào", "japanese": "紹介する"},
           {"word": "护士", "pinyin": "hùshi", "japanese": "看護師"},
-          {"word": "高二学生", "pinyin": "gāo'èr xuésheng", "japanese": "高校2年生"},
-          {"word": "在", "pinyin": "zài", "japanese": "〜において"},
-          {"word": "家人", "pinyin": "jiārén", "japanese": "家族"},
-          {"word": "现在", "pinyin": "xiànzài", "japanese": "今／現在"},
-          {"word": "学到", "pinyin": "xuédào", "japanese": "勉強する／学ぶ"},
           {"word": "专业课", "pinyin": "zhuānyèkè", "japanese": "専門科目"},
           {"word": "生活", "pinyin": "shēnghuó", "japanese": "生活"},
           {"word": "忙", "pinyin": "máng", "japanese": "忙しい"},
-          {"word": "快乐", "pinyin": "kuàilè", "japanese": "楽しい"},
+          {"word": "快乐", "pinyin": "kuàlè", "japanese": "楽しい"},
           {"word": "每周", "pinyin": "měi zhōu", "japanese": "毎週"},
           {"word": "中国朋友", "pinyin": "Zhōngguó péngyou", "japanese": "中国人の友人"},
           {"word": "常嘛", "pinyin": "chángma", "japanese": "いつも／よく"},
@@ -1535,15 +1296,410 @@ class _MyHomePageState extends State<MyHomePage> {
           {"word": "马路嘛", "pinyin": "mǎlùma", "japanese": "烏丸線"},
           {"word": "了解", "pinyin": "liǎojiě", "japanese": "理解する／分かる"},
           {"word": "文化", "pinyin": "wénhuà", "japanese": "文化"},
-          {"word": "历史", "pinyin": "lìshǐ", "japanese": "歴史"},
-          {"word": "交流", "pinyin": "jiāoliú", "japanese": "交流する"},
-          {"word": "介绍", "pinyin": "jièshào", "japanese": "紹介する"},
-          {"word": "自己", "pinyin": "zìjǐ", "japanese": "自分"},
-          {"word": "每个", "pinyin": "měi ge", "japanese": "これ／この"},
-          {"word": "每天", "pinyin": "měitiān", "japanese": "毎日"},
           {"word": "相信", "pinyin": "xiāngxìn", "japanese": "信じる"},
+        ],
+        "grammar_quizzes": [
+          {
+            "quiz":
+                "「【私の夢を実現するために】、アメリカへ留学したい」という目的規定を表す前置詞を選びなさい。\n（ ）实现我的梦想，我想去美国留学。",
+            "choices": ["因为", "为了", "虽然", "关于"],
+            "answer": "为了",
+            "explanation": "「为了 + 目的」で、「〜のために、〜を目指して」という行為の目的・動機を提示できます。",
+          },
+          {
+            "quiz": "「自己紹介を【ちょっとさせていただきます】」と言うときの、自然なフレーズを選びなさい。",
+            "choices": ["我来自我介绍在。", "我来自我介绍一下。", "我自我介绍会。", "一下我自我介绍。"],
+            "answer": "我来自我介绍一下。",
+            "explanation":
+                "自分が進んで何かをする意向を示す「我来〜」に、動作を和らげる「一下」を組み合わせることで、「ちょっと自己紹介をさせていただきます」という自然な表現になります。",
+          },
         ],
       },
     ]);
+  }
+
+  void _resetQuiz() {
+    setState(() {
+      _currentQuizIndex = 0;
+      _selectedChoice = null;
+      _isAnswered = false;
+      _isCorrect = false;
+      _score = 0;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    var currentLesson = _masterLessonList[_selectedLessonIndex];
+    List<dynamic> grammarList = currentLesson['grammar'] ?? [];
+    List<dynamic> sentencesList = currentLesson['sentences'] ?? [];
+    List<dynamic> vocabularyList = currentLesson['vocabulary'] ?? [];
+    List<dynamic> quizList = currentLesson['grammar_quizzes'] ?? [];
+
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        title: Text(widget.title),
+      ),
+      drawer: Drawer(
+        child: ListView.builder(
+          itemCount: _masterLessonList.length,
+          itemBuilder: (context, index) {
+            return ListTile(
+              leading: CircleAvatar(child: Text('${index + 1}')),
+              title: Text(_masterLessonList[index]['title']),
+              selected: _selectedLessonIndex == index,
+              onTap: () {
+                setState(() {
+                  _selectedLessonIndex = index;
+                  _activeTab = 'grammar';
+                  _resetQuiz();
+                });
+                Navigator.pop(context);
+              },
+            );
+          },
+        ),
+      ),
+      body: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            color: Colors.deepPurple.shade50,
+            width: double.infinity,
+            child: Text(
+              '第${_selectedLessonIndex + 1}講: ${currentLesson['title']}',
+              style: const TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: Colors.deepPurple,
+              ),
+            ),
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              _buildTabButton('grammar', '文法解説'),
+              _buildTabButton('sentences', '日常会話'),
+              _buildTabButton('vocabulary', '重要単語'),
+              _buildTabButton('quiz', '4択クイズ'),
+            ],
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: IndexedStack(
+              index: _activeTab == 'grammar'
+                  ? 0
+                  : _activeTab == 'sentences'
+                  ? 1
+                  : _activeTab == 'vocabulary'
+                  ? 2
+                  : 3,
+              children: [
+                _buildGrammarTab(grammarList),
+                _buildSentencesTab(sentencesList),
+                _buildVocabularyTab(vocabularyList),
+                _buildQuizTab(quizList),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTabButton(String tabName, String label) {
+    bool isActive = _activeTab == tabName;
+    return TextButton(
+      onPressed: () {
+        setState(() {
+          _activeTab = tabName;
+          if (tabName == 'quiz') _resetQuiz();
+        });
+      },
+      style: TextButton.styleFrom(
+        foregroundColor: isActive ? Colors.deepPurple : Colors.grey,
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGrammarTab(List<dynamic> list) {
+    return ListView.builder(
+      itemCount: list.length,
+      itemBuilder: (context, index) {
+        return Card(
+          margin: const EdgeInsets.all(8),
+          child: ListTile(
+            title: Text(
+              list[index]['title'] ?? '',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            subtitle: Padding(
+              padding: const EdgeInsets.only(top: 8.0),
+              child: Text(list[index]['desc'] ?? ''),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSentencesTab(List<dynamic> list) {
+    return ListView.builder(
+      itemCount: list.length,
+      itemBuilder: (context, index) {
+        final chineseText = list[index]['chinese'] ?? '';
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: InkWell(
+            onTap: () => _speak(chineseText), // タップで中国語音声を再生
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          chineseText,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.blueGrey,
+                          ),
+                        ),
+                      ),
+                      const Icon(
+                        Icons.volume_up,
+                        color: Colors.deepPurple,
+                        size: 20,
+                      ), // 音声アイコン
+                    ],
+                  ),
+                  Text(
+                    list[index]['pinyin'] ?? '',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.green.shade700,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                  const Divider(height: 12),
+                  Text(
+                    list[index]['japanese'] ?? '',
+                    style: const TextStyle(fontSize: 15),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildVocabularyTab(List<dynamic> list) {
+    return ListView.builder(
+      itemCount: list.length,
+      itemBuilder: (context, index) {
+        final wordText = list[index]['word'] ?? '';
+        return ListTile(
+          onTap: () => _speak(wordText), // タップで中国語音声を再生
+          title: Row(
+            children: [
+              Text(
+                wordText,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Icon(Icons.volume_up, color: Colors.grey, size: 16),
+            ],
+          ),
+          subtitle: Text(list[index]['pinyin'] ?? ''),
+          trailing: Text(
+            list[index]['japanese'] ?? '',
+            style: const TextStyle(fontSize: 16),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildQuizTab(List<dynamic> quizzes) {
+    if (quizzes.isEmpty) {
+      return const Center(child: Text("この講にはクイズがありません。"));
+    }
+
+    if (_currentQuizIndex >= quizzes.length) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.emoji_events, size: 80, color: Colors.amber),
+            const SizedBox(height: 16),
+            const Text(
+              "クイズ完了！",
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              "スコア: $_score / ${quizzes.length}",
+              style: const TextStyle(fontSize: 18),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              onPressed: _resetQuiz,
+              child: const Text("もう一度挑戦する"),
+            ),
+          ],
+        ),
+      );
+    }
+
+    var quizData = quizzes[_currentQuizIndex];
+    List<String> choices = List<String>.from(quizData['choices']);
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            "問題 ${_currentQuizIndex + 1} / ${quizzes.length}",
+            style: const TextStyle(color: Colors.grey),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            quizData['quiz'] ?? '',
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 24),
+          ...choices.map((choice) {
+            bool isSelected = _selectedChoice == choice;
+            Color? btnColor = Colors.white;
+            if (_isAnswered) {
+              if (choice == quizData['answer']) {
+                btnColor = Colors.green.shade100;
+              } else if (isSelected) {
+                btnColor = Colors.red.shade100;
+              }
+            } else if (isSelected) {
+              btnColor = Colors.deepPurple.shade50;
+            }
+
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6.0),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    backgroundColor: btnColor,
+                    side: BorderSide(
+                      color: isSelected
+                          ? Colors.deepPurple
+                          : Colors.grey.shade300,
+                      width: isSelected ? 2 : 1,
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  onPressed: _isAnswered
+                      ? null
+                      : () {
+                          setState(() {
+                            _selectedChoice = choice;
+                          });
+                        },
+                  child: Text(
+                    choice,
+                    style: const TextStyle(fontSize: 16, color: Colors.black87),
+                  ),
+                ),
+              ),
+            );
+          }),
+          const SizedBox(height: 24),
+          if (!_isAnswered)
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _selectedChoice == null
+                    ? null
+                    : () {
+                        setState(() {
+                          _isAnswered = true;
+                          _isCorrect = _selectedChoice == quizData['answer'];
+                          if (_isCorrect) _score++;
+                        });
+                      },
+                child: const Text("回答を確定する"),
+              ),
+            ),
+          if (_isAnswered) ...[
+            Container(
+              padding: const EdgeInsets.all(12),
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: _isCorrect ? Colors.green.shade50 : Colors.red.shade50,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        _isCorrect ? Icons.check_circle : Icons.cancel,
+                        color: _isCorrect ? Colors.green : Colors.red,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _isCorrect ? "正解！" : "不正解...",
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: _isCorrect ? Colors.green : Colors.red,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    "解説:\n${quizData['explanation'] ?? ''}",
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () {
+                  setState(() {
+                    _currentQuizIndex++;
+                    _selectedChoice = null;
+                    _isAnswered = false;
+                  });
+                },
+                child: Text(
+                  _currentQuizIndex + 1 >= quizzes.length ? "結果を見る" : "次の問題へ",
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 }
